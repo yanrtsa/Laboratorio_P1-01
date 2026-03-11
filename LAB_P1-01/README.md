@@ -29,3 +29,5 @@ Output esperado:
 
 [[1.88, 2.88],
  [2.62, 3.62]]
+
+Foi usado ferramenta de ia como o chat gpt para tirar duvidas.
