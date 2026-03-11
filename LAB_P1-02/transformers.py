@@ -8,9 +8,11 @@ print("Vocabulário:")
 print(df_vocab)
 
 # Frase de entrada
-sentence = ["o","banco","bloqueou","cartao"]
+sentence = ["o","banco","bloqueou","o","cartao"]
 
 ids = [vocab[word] for word in sentence]
+print("ids:")
+print(ids)
 
 vocab_size = len(vocab)
 d_model = 64
@@ -53,6 +55,11 @@ def self_attention(X):
     scores = scores / np.sqrt(dk)
 
     attn = softmax(scores)
+
+    # SANITY CHECK
+    soma_att = attn.sum(axis=-1)
+    print("Sanity check - soma da atenção (deve ser ~1):")
+    print(soma_att)
 
     Z = attn @ V
 
