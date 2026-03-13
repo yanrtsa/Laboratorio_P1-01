@@ -1,4 +1,4 @@
-# Laboratório P1
+# Laboratório P1-02
 
 ## Como executar o código
 
