@@ -295,7 +295,7 @@ O programa executa as seguintes validações:
 
 ## 📝 Notas sobre Uso de Inteligência Artificial
 
-**Partes geradas/complementadas com IA, revisadas por [Seu Nome]**
+**Partes geradas/complementadas com IA, revisadas por Yan**
 
 A IA foi utilizada apenas dentro do escopo permitido:
 - ✅ **Brainstorming** de estrutura modular
