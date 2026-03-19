@@ -6,8 +6,10 @@ def create_causal_mask(seq_len):
     return mask
 
 def softmax(x):
-    e_x = np.exp(x - np.max(x, axis=-1, keepdims=True))
-    return e_x / np.sum(e_x, axis=-1, keepdims=True)
+    x_stable = x - np.max(x, axis=1, keepdims=True)
+    exp_x = np.exp(x_stable)
+    sum_exp = np.sum(exp_x, axis=1, keepdims=True)
+    return exp_x / sum_exp
 
 # Tarefa 1: Teste da Máscara Causal
 seq_len = 5

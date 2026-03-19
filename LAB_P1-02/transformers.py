@@ -28,8 +28,10 @@ X = X.reshape(batch_size, seq_len, d_model)
 print("\nFormato da entrada:", X.shape)
 
 def softmax(x):
-    exp = np.exp(x - np.max(x, axis=-1, keepdims=True))
-    return exp / np.sum(exp, axis=-1, keepdims=True)
+    x_stable = x - np.max(x, axis=1, keepdims=True)
+    exp_x = np.exp(x_stable)
+    sum_exp = np.sum(exp_x, axis=1, keepdims=True)
+    return exp_x / sum_exp
 
 def layer_norm(x, eps=1e-6):
     mean = np.mean(x, axis=-1, keepdims=True)
