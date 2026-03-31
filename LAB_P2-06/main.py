@@ -24,20 +24,33 @@ def get_stats(vocab):
 
     return pairs
 
+def merge_vocab(pair, v_in):
+    v_out = {}
+    bigram = ' '.join(pair)
+    replacement = ''.join(pair)
+
+    for word, freq in v_in.items():
+        new_word = word.replace(bigram, replacement)
+        v_out[new_word] = freq
+
+    return v_out
 
 def main():
     print("Vocab inicial:")
     for word, freq in vocab.items():
         print(f"{word}: {freq}")
 
-    print("\nPares e frequências:")
     stats = get_stats(vocab)
 
-    for pair, freq in stats.items():
-        print(f"{pair}: {freq}")
+    best_pair = max(stats, key=stats.get)
 
-    # validação pedida no PDF
-    print("\nFrequência de ('e', 's'):", stats.get(('e', 's')))
+    print("\nPar mais frequente:", best_pair)
+
+    new_vocab = merge_vocab(best_pair, vocab)
+
+    print("\nNovo vocab após merge:")
+    for word, freq in new_vocab.items():
+        print(f"{word}: {freq}")
 
 
 if __name__ == "__main__":
