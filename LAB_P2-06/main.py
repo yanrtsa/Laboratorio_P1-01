@@ -53,7 +53,6 @@ def main():
         for word, freq in current_vocab.items():
             print(f"{word}: {freq}")
 
-    # 🔥 WordPiece fora do loop (correto)
     print("\n--- WordPiece (BERT) ---")
 
     tokenizer = AutoTokenizer.from_pretrained("bert-base-multilingual-cased")
