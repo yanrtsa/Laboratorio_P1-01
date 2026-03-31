@@ -1,6 +1,6 @@
 # Laboratório 6 - BPE Tokenizer
+from transformers import AutoTokenizer
 
-# Corpus inicial
 vocab = {
     'l o w </w>': 5,
     'l o w e r </w>': 2,
@@ -36,21 +36,37 @@ def merge_vocab(pair, v_in):
     return v_out
 
 def main():
-    print("Vocab inicial:")
-    for word, freq in vocab.items():
-        print(f"{word}: {freq}")
+    current_vocab = vocab.copy()
+    num_iterations = 5
 
-    stats = get_stats(vocab)
+    for i in range(num_iterations):
+        print(f"\n--- Iteração {i + 1} ---")
 
-    best_pair = max(stats, key=stats.get)
+        stats = get_stats(current_vocab)
 
-    print("\nPar mais frequente:", best_pair)
+        best_pair = max(stats, key=stats.get)
+        print("Par mais frequente:", best_pair, "->", "".join(best_pair))
 
-    new_vocab = merge_vocab(best_pair, vocab)
+        current_vocab = merge_vocab(best_pair, current_vocab)
 
-    print("\nNovo vocab após merge:")
-    for word, freq in new_vocab.items():
-        print(f"{word}: {freq}")
+        print("Vocab atualizado:")
+        for word, freq in current_vocab.items():
+            print(f"{word}: {freq}")
+
+    # 🔥 WordPiece fora do loop (correto)
+    print("\n--- WordPiece (BERT) ---")
+
+    tokenizer = AutoTokenizer.from_pretrained("bert-base-multilingual-cased")
+
+    frase = "Os hiper-parâmetros do transformer são inconstitucionalmente difíceis de ajustar."
+
+    tokens = tokenizer.tokenize(frase)
+
+    print("\nFrase:")
+    print(frase)
+
+    print("\nTokens:")
+    print(tokens)
 
 
 if __name__ == "__main__":
