@@ -9,8 +9,7 @@ Pipeline completo de fine-tuning do modelo **TinyLlama-1.1B** utilizando técnic
 │   └── main-07.py        # Script principal (Passos 2, 3 e 4)
 ├── train.json             # Dataset de treino (90%)
 ├── test.json              # Dataset de teste (10%)
-├── requirements.txt
-└── README.md
+└── requirements.txt
 ```
 
 ## Como Executar
