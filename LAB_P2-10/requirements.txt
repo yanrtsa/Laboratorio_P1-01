@@ -1,0 +1,7 @@
+torch>=2.1.0
+transformers>=4.40.0
+accelerate>=0.27.0
+bitsandbytes>=0.41.1
+sentencepiece>=0.1.99
+# Flash Attention 2 requer Linux + GPU Ampere+ (ex: Colab A100/T4)
+# pip install flash-attn --no-build-isolation
