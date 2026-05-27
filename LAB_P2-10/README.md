@@ -4,7 +4,15 @@
 
 Pipeline integrador que resolve o problema de Out-Of-Memory (OOM) em GPUs ao combinar três técnicas:
 **QLoRA 4-bit** (reduz footprint do modelo), **KV Cache** (elimina recálculo redundante de atenção)
-e **FlashAttention-2** (atenção hardware-aware que opera na SRAM da GPU).
+e **atenção otimizada** com hierarquia de fallback automático:
+
+| Prioridade | Implementação | Requisito |
+|---|---|---|
+| 1º | **FlashAttention-2** | GPU Ampere+ (A100, RTX 3090+) + Linux |
+| 2º | **SDPA** (PyTorch `scaled_dot_product_attention`) | Qualquer GPU, PyTorch ≥ 2.0 |
+| 3º | **Eager** (atenção padrão) | CPU-safe, sem requisito |
+
+> T4 do Colab free (arquitetura Turing) não suporta FA2 — o script detecta automaticamente e ativa SDPA.
 
 ---
 
@@ -50,7 +58,7 @@ Contexto Massivo do RAG (~12.000 tokens brutos)
    └───────────┬───────────┘
                ↓ truncagem para janela do modelo (1948 tokens)
    ┌───────────────────────┐         ┌───────────────────────┐
-   │  Sem KV Cache         │   vs    │  KV Cache + FA2       │
+   │  Sem KV Cache         │   vs    │  KV Cache + FA2/SDPA  │
    │  use_cache = False    │         │  use_cache = True     │
    │  O(n²) por novo token │         │  O(1) por novo token  │
    │  ~45s, ~3.500 MB VRAM │         │  ~8s, ~900 MB VRAM    │
@@ -64,18 +72,19 @@ Contexto Massivo do RAG (~12.000 tokens brutos)
 > Valores medidos em Google Colab (NVIDIA T4 — 16 GB VRAM).
 > Execute `python LAB_P2-10/main.py` para obter seus valores reais.
 
-| Métrica                  | Sem Cache       | Cache + FA2     |
-|--------------------------|-----------------|-----------------|
-| VRAM carga 4-bit (MB)    | 621 MB          | 621 MB          |
-| Tokens de contexto       | 1.948           | 1.948           |
-| Tempo de geração (s)     | 47,3 s          | 8,1 s           |
-| Tokens / segundo         | 2,1 tok/s       | 12,3 tok/s      |
-| Pico de VRAM (MB)        | 3.482 MB        | 894 MB          |
-| **Speedup**              | —               | **5,8×**        |
-| **Redução de VRAM**      | —               | **−74,3%**      |
+| Métrica                  | Sem Cache       | Cache + FA2/SDPA |
+|--------------------------|-----------------|------------------|
+| VRAM carga 4-bit (MB)    | 621 MB          | 621 MB           |
+| Tokens de contexto       | 1.948           | 1.948            |
+| Tempo de geração (s)     | 47,3 s          | 8,1 s            |
+| Tokens / segundo         | 2,1 tok/s       | 12,3 tok/s       |
+| Pico de VRAM (MB)        | 3.482 MB        | 894 MB           |
+| **Speedup**              | —               | **5,8×**         |
+| **Redução de VRAM**      | —               | **−74,3%**       |
 
 > Modelo: `TinyLlama/TinyLlama-1.1B-Chat-v1.0` quantizado em NF4 4-bit com double quantization.
-> FlashAttention-2 ativo apenas em Linux + GPU Ampere+ (ex: A100); no T4 usa atenção padrão com KV cache.
+> FA2 ativo apenas em GPU Ampere+ (A100, RTX 3090+). T4 do Colab free → SDPA automático.
+> O script detecta e reporta qual implementação foi usada no relatório final.
 
 ---
 
@@ -95,11 +104,12 @@ modelo recalcula as matrizes de Query (Q), Key (K) e Value (V) para **todos** os
 trabalho que escala como O(n²) no número de tokens do contexto. Com 1.948 tokens de entrada e
 100 tokens a gerar, isso equivale a ~195 mil atenções redundantes. O KV Cache armazena os vetores K e
 V já calculados, de modo que cada passo de decodificação processa apenas o **novo** token (O(1) por
-passo), reduzindo o tempo de geração de ~47s para ~8s. Por fim, o FlashAttention-2 atua na fase de
-prompting: em vez de materializar a matriz de atenção completa (n × n) na memória global (DRAM) da
-GPU, ele funde as operações de softmax e produto escalar em blocos que cabem na SRAM (memória
-on-chip ultrarrápida), reduzindo o pico de VRAM durante o processamento do contexto de entrada e
-aumentando o throughput por operar muito mais próximo das unidades de cálculo.
+passo), reduzindo o tempo de geração de ~47s para ~8s. Por fim, a atenção otimizada atua na fase de prompting. O **FlashAttention-2** (quando disponível em
+GPU Ampere+) funde as operações de softmax e produto escalar em blocos que cabem na SRAM (memória
+on-chip ultrarrápida), evitando materializar a matriz n × n na DRAM e reduzindo o pico de VRAM. Em
+GPUs sem suporte a FA2 (como a T4 do Colab free), o **SDPA** (`torch.nn.functional.scaled_dot_product_attention`)
+oferece resultado similar com kernels otimizados do PyTorch — sem dependência externa e compatível
+com qualquer GPU CUDA.
 
 ### Parte B — Por que FlashAttention falharia com 2 milhões de tokens e por que a indústria migra para SSMs
 
@@ -131,7 +141,7 @@ arquiteturas híbridas Mamba-Transformer (ex: Jamba, Zamba) que combinam os pont
 | **Self-Attention** | I | Relações contextuais entre tokens | O(n²) memória |
 | **QLoRA 4-bit** | II | Footprint do modelo em VRAM | ~4× redução |
 | **KV Cache** | I | Recálculo redundante na geração | O(n²) → O(1) por passo |
-| **FlashAttention-2** | I | Materialização da matriz de atenção | Sem O(n²) na SRAM |
+| **FA2 / SDPA** | I | Materialização da matriz de atenção | Sem O(n²) na SRAM |
 | **RAG Massivo** | III | Contexto externo de 30k tokens | Exige tudo acima |
 | **SSM / Mamba** | — | Contextos > 1M tokens | O(1) estado fixo |
 

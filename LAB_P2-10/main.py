@@ -2,12 +2,14 @@
 LAB P2-10 — O Pipeline Definitivo: RAG + QLoRA + Otimização de Inferência na GPU
 
 HealthTech — Sistema de Geração de Relatórios Médicos Automatizados
-Missão: resolver OOM na GPU combinando QLoRA 4-bit + KV Cache + FlashAttention-2
+Missão: resolver OOM na GPU combinando QLoRA 4-bit + KV Cache + atenção otimizada
 
 Passo 1: Ingestão eficiente — modelo carregado em 4-bits (QLoRA)
 Passo 2: Simulação do RAG massivo — 5 capítulos médicos (~12.000 tokens brutos)
 Passo 3: Geração SEM KV Cache — baseline com recálculo O(n²) por token
-Passo 4: Geração COM KV Cache + FlashAttention-2 — pipeline otimizado
+Passo 4: Geração COM KV Cache + atenção otimizada — pipeline otimizado
+         Hierarquia de fallback: FlashAttention-2 → SDPA (PyTorch) → eager
+         FA2 exige GPU Ampere+ (A100/3090+). T4 do Colab free → cai em SDPA.
 Passo 5: Relatório comparativo de métricas
 """
 
@@ -266,9 +268,18 @@ def build_bnb_config() -> BitsAndBytesConfig:
 
 def load_model(
     use_flash_attention: bool = False,
-) -> tuple[AutoModelForCausalLM, AutoTokenizer, float]:
-    """Carrega TinyLlama em 4-bits (QLoRA). Tenta FlashAttention-2 se solicitado."""
-    fa_label = " + FlashAttention-2" if use_flash_attention else ""
+) -> tuple[AutoModelForCausalLM, AutoTokenizer, float, str]:
+    """Carrega TinyLlama em 4-bits (QLoRA).
+
+    Hierarquia de atenção quando use_flash_attention=True:
+      1. flash_attention_2 — requer GPU Ampere+ e pacote flash-attn
+      2. sdpa             — torch.nn.functional.scaled_dot_product_attention (qualquer GPU)
+      3. eager            — atenção padrão (CPU-safe)
+
+    Retorna: (model, tokenizer, vram_usada_mb, impl_ativa)
+    """
+    attn_impl = "eager"
+    fa_label = " + atenção otimizada" if use_flash_attention else ""
     section(f"PASSO 1 — Carregando modelo em 4-bits (QLoRA){fa_label}")
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
@@ -276,7 +287,7 @@ def load_model(
     if not HAS_GPU:
         print("  -> GPU nao disponivel. Carregando em CPU sem quantizacao 4-bit.")
         model = AutoModelForCausalLM.from_pretrained(MODEL_ID, torch_dtype=torch.float32)
-        return model, tokenizer, 0.0
+        return model, tokenizer, 0.0, attn_impl
 
     reset_peak()
     vram_before = vram_mb()
@@ -288,26 +299,40 @@ def load_model(
     }
 
     if use_flash_attention:
+        # Tentativa 1: FlashAttention-2 (Ampere+: A100, RTX 3090+)
         kwargs["attn_implementation"] = "flash_attention_2"
-
-    flash_active = False
-    try:
-        model = AutoModelForCausalLM.from_pretrained(MODEL_ID, **kwargs)
-        flash_active = use_flash_attention
-    except Exception as exc:
-        if use_flash_attention:
-            print(f"  -> FlashAttention-2 indisponivel ({type(exc).__name__}).")
-            print("     Causa comum: requer Linux + GPU Ampere+ + pacote flash-attn.")
-            print("     Usando atencao padrao como fallback.")
-            kwargs.pop("attn_implementation")
+        try:
             model = AutoModelForCausalLM.from_pretrained(MODEL_ID, **kwargs)
-        else:
-            raise
+            attn_impl = "flash_attention_2"
+        except Exception as exc:
+            print(f"  -> FlashAttention-2 indisponivel ({type(exc).__name__}).")
+            print("     Requer GPU Ampere+ (A100, RTX 3090+). T4 do Colab free nao suporta.")
+            print("     Tentando SDPA (Scaled Dot Product Attention do PyTorch)...")
 
+            # Tentativa 2: SDPA — funciona em qualquer GPU com PyTorch >= 2.0
+            kwargs["attn_implementation"] = "sdpa"
+            try:
+                model = AutoModelForCausalLM.from_pretrained(MODEL_ID, **kwargs)
+                attn_impl = "sdpa"
+                print("  -> SDPA ativado com sucesso (resultado similar ao FA2).")
+            except Exception as exc2:
+                print(f"  -> SDPA tambem indisponivel ({type(exc2).__name__}). Usando eager.")
+                kwargs.pop("attn_implementation")
+                model = AutoModelForCausalLM.from_pretrained(MODEL_ID, **kwargs)
+                attn_impl = "eager"
+    else:
+        model = AutoModelForCausalLM.from_pretrained(MODEL_ID, **kwargs)
+        attn_impl = "eager"
+
+    _attn_status = {
+        "flash_attention_2": "ATIVO",
+        "sdpa": "ATIVO via SDPA (fallback PyTorch — GPU qualquer)",
+        "eager": "INATIVO (atenção padrão eager)",
+    }
     vram_model = vram_mb() - vram_before
     print(f"  -> VRAM ocupada pelo modelo 4-bit : {vram_model:.1f} MB")
-    print(f"  -> FlashAttention-2               : {'ATIVO' if flash_active else 'INATIVO (fallback)'}")
-    return model, tokenizer, vram_model
+    print(f"  -> Atenção otimizada              : {_attn_status[attn_impl]}")
+    return model, tokenizer, vram_model, attn_impl
 
 
 # ─────────────────────────────────────────────────────────────
@@ -364,7 +389,7 @@ def main() -> None:
     print(f"  Tokens estimados    : ~{int(n_words * 1.3):,} tokens (antes de truncagem)")
 
     # ── Passo 1 + 3: Modelo padrão → benchmark SEM cache ─────
-    model_std, tokenizer, vram_std = load_model(use_flash_attention=False)
+    model_std, tokenizer, vram_std, _ = load_model(use_flash_attention=False)
 
     # Tokenizar e truncar ao limite do modelo (2048 − MAX_NEW_TOKENS)
     max_ctx_len = model_std.config.max_position_embeddings - MAX_NEW_TOKENS
@@ -394,11 +419,17 @@ def main() -> None:
     if HAS_GPU:
         torch.cuda.empty_cache()
 
-    # ── Passo 4: Modelo + FlashAttention-2 → benchmark COM cache ─
-    model_opt, _, vram_opt = load_model(use_flash_attention=True)
+    # ── Passo 4: Modelo + atenção otimizada → benchmark COM cache ─
+    model_opt, _, vram_opt, attn_impl_opt = load_model(use_flash_attention=True)
+    _attn_display = {
+        "flash_attention_2": "FlashAttention-2",
+        "sdpa": "SDPA (PyTorch)",
+        "eager": "Eager (padrão)",
+    }
+    attn_label = _attn_display.get(attn_impl_opt, attn_impl_opt)
     r_cache = benchmark(
         model_opt, input_ids.to(DEVICE), use_cache=True,
-        label="COM KV Cache + FlashAttention-2 (pipeline otimizado)"
+        label=f"COM KV Cache + {attn_label} (pipeline otimizado)"
     )
     del model_opt
     gc.collect()
@@ -412,11 +443,12 @@ def main() -> None:
     vram_saved = r_no_cache["peak_vram_mb"] - r_cache["peak_vram_mb"]
     vram_pct = vram_saved / max(r_no_cache["peak_vram_mb"], 1.0) * 100
 
+    col2_header = f"Cache+{attn_label}"[:13].center(13)
     print(f"""
   ┌──────────────────────────────────────────────────────────┐
   │          MÉTRICAS DE BENCHMARK — LAB P2-10               │
   ├──────────────────────────┬──────────────┬───────────────┤
-  │ Métrica                  │  Sem Cache   │  Cache + FA2  │
+  │ Métrica                  │  Sem Cache   │ {col2_header} │
   ├──────────────────────────┼──────────────┼───────────────┤
   │ VRAM carga 4-bit (MB)    │  {vram_std:>8.1f}    │  {vram_opt:>8.1f}   │
   │ Tokens de contexto       │  {real_tokens:>8,}    │  {real_tokens:>8,}   │
@@ -428,8 +460,9 @@ def main() -> None:
   │ Reducao de VRAM          │      —       │  {vram_pct:>+5.1f}%        │
   └──────────────────────────┴──────────────┴───────────────┘
 
-  Nota: execute em GPU CUDA (Google Colab T4/A100) para métricas
-  reais de VRAM. Em CPU apenas o tempo de geração é válido.
+  Atenção usada na coluna otimizada : {attn_label}
+  FA2 requer Ampere+ (A100/3090+). T4 (Colab free) usa SDPA como fallback.
+  Em CPU apenas o tempo de geração é válido (VRAM = N/A).
     """)
 
     print("[LAB P2-10] Pipeline concluido com sucesso.\n")
